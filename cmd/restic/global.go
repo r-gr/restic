@@ -286,6 +286,7 @@ func resolvePassword(opts GlobalOptions, envStr string) (string, error) {
 		}
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
 		output, err := cmd.Output()
 		if err != nil {
 			return "", err
