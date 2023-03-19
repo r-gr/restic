@@ -14,18 +14,26 @@
 Preparing a new repository
 ##########################
 
-The place where your backups will be saved is called a "repository".
+The place where your backups will be saved is called a "repository". This is
+simply a directory containing a set of subdirectories and files created by
+restic to store your backups, some corresponding metadata and encryption keys.
+
+To access the repository, a password (also called a key) must be specified. A
+repository can hold multiple keys that can all be used to access the repository.
+
 This chapter explains how to create ("init") such a repository. The repository
 can be stored locally, or on some remote server or service. We'll first cover
 using a local repository; the remaining sections of this chapter cover all the
 other options. You can skip to the next chapter once you've read the relevant
 section here.
 
-For automated backups, restic accepts the repository location in the
+For automated backups, restic supports specifying the repository location in the
 environment variable ``RESTIC_REPOSITORY``. Restic can also read the repository
 location from a file specified via the ``--repository-file`` option or the
-environment variable ``RESTIC_REPOSITORY_FILE``. For the password, several
-options exist:
+environment variable ``RESTIC_REPOSITORY_FILE``.
+
+For automating the supply of the repository password to restic, several options
+exist:
 
  * Setting the environment variable ``RESTIC_PASSWORD``
 
@@ -36,21 +44,24 @@ options exist:
    option ``--password-command`` or the environment variable
    ``RESTIC_PASSWORD_COMMAND``
    
- * The ``init`` command has an option called ``--repository-version`` which can
-   be used to explicitely set the version for the new repository. By default,
-   the current stable version is used. Have a look at the `design documentation
-   <https://github.com/restic/restic/blob/master/doc/design.rst>`__ for
-   details. The alias ``latest`` will always point to the latest repository version.
-   The below table shows which restic version is required to use a certain
-   repository version and shows new features introduced by the repository format.
+The ``init`` command has an option called ``--repository-version`` which can
+be used to explicitly set the version of the new repository. By default, the
+current stable version is used (see table below). The alias ``latest`` will
+always resolve to the latest repository version. Have a look at the `design
+documentation <https://github.com/restic/restic/blob/master/doc/design.rst>`__
+for more details.
 
-+--------------------+------------------------+---------------------+
-| Repository version | Minimum restic version | Major new features  |
-+====================+========================+=====================+
-| ``1``              | any version            |                     |
-+--------------------+------------------------+---------------------+
-| ``2``              | >= 0.14.0              | Compression support |
-+--------------------+------------------------+---------------------+
+The below table shows which restic version is required to use a certain
+repository version, as well as notable features introduced in the various
+versions.
+
++--------------------+-------------------------+---------------------+------------------+
+| Repository version | Required restic version | Major new features  | Comment          |
++====================+=========================+=====================+==================+
+| ``1``              | Any                     |                     |                  |
++--------------------+-------------------------+---------------------+------------------+
+| ``2``              | 0.14.0 or newer         | Compression support | Current default  |
++--------------------+-------------------------+---------------------+------------------+
 
 
 Local
@@ -75,10 +86,11 @@ command and enter the same password twice:
 
 .. warning::
 
-   On Linux, storing the backup repository on a CIFS (SMB) share is not
-   recommended due to compatibility issues. Either use another backend
-   or set the environment variable `GODEBUG` to `asyncpreemptoff=1`.
-   Refer to GitHub issue `#2659 <https://github.com/restic/restic/issues/2659>`_ for further explanations.
+   On Linux, storing the backup repository on a CIFS (SMB) share or backing up
+   data from a CIFS share is not recommended due to compatibility issues in
+   older Linux kernels. Either use another backend or set the environment
+   variable `GODEBUG` to `asyncpreemptoff=1`. Refer to GitHub issue
+   :issue:`2659` for further explanations.
 
 SFTP
 ****
@@ -210,6 +222,8 @@ REST server uses exactly the same directory structure as local backend,
 so you should be able to access it both locally and via HTTP, even
 simultaneously.
 
+.. _Amazon S3:
+
 Amazon S3
 *********
 
@@ -242,6 +256,9 @@ environment variable ``AWS_DEFAULT_REGION`` or calling restic with an option
 parameter like ``-o s3.region="us-east-1"``. If the region is not specified,
 the default region is used. Afterwards, the S3 server (at least for AWS,
 ``s3.amazonaws.com``) will redirect restic to the correct endpoint.
+
+When using temporary credentials make sure to include the session token via
+then environment variable ``AWS_SESSION_TOKEN``.
 
 Until version 0.8.0, restic used a default prefix of ``restic``, so the files
 in the bucket were placed in a directory named ``restic``. If you want to
@@ -287,7 +304,7 @@ credentials of your Minio Server.
 .. code-block:: console
 
     $ export AWS_ACCESS_KEY_ID=<YOUR-MINIO-ACCESS-KEY-ID>
-    $ export AWS_SECRET_ACCESS_KEY= <YOUR-MINIO-SECRET-ACCESS-KEY>
+    $ export AWS_SECRET_ACCESS_KEY=<YOUR-MINIO-SECRET-ACCESS-KEY>
 
 Now you can easily initialize restic to use Minio server as a backend with
 this command.
@@ -450,6 +467,19 @@ The policy of the new container created by restic can be changed using environme
 Backblaze B2
 ************
 
+.. warning::
+
+   Due to issues with error handling in the current B2 library that restic uses,
+   the recommended way to utilize Backblaze B2 is by using its S3-compatible API.
+   
+   Follow the documentation to `generate S3-compatible access keys`_ and then
+   setup restic as described at :ref:`Amazon S3`. This is expected to work better
+   than using the Backblaze B2 backend directly.
+
+   Different from the B2 backend, restic's S3 backend will only hide no longer
+   necessary files. Thus, make sure to setup lifecycle rules to eventually
+   delete hidden files.
+
 Restic can backup data to any Backblaze B2 bucket. You need to first setup the
 following environment variables with the credentials you can find in the
 dashboard on the "Buckets" page when signed into your B2 account:
@@ -488,11 +518,13 @@ The number of concurrent connections to the B2 service can be set with the ``-o
 b2.connections=10`` switch. By default, at most five parallel connections are
 established.
 
+.. _generate S3-compatible access keys: https://help.backblaze.com/hc/en-us/articles/360047425453-Getting-Started-with-the-S3-Compatible-API
+
 Microsoft Azure Blob Storage
 ****************************
 
 You can also store backups on Microsoft Azure Blob Storage. Export the Azure
-account name and key as follows:
+Blob Storage account name and key as follows:
 
 .. code-block:: console
 
@@ -603,6 +635,13 @@ initiate a new repository in the path ``bar`` in the remote ``foo``:
     $ restic -r rclone:foo:bar init
 
 Restic takes care of starting and stopping rclone.
+
+.. note:: If you get an error message saying "cannot implicitly run relative
+          executable rclone found in current directory", this means that an
+          rclone executable was found in the current directory. For security
+          reasons restic will not run this implicitly, instead you have to
+          use the ``-o rclone.program=./rclone`` extended option to override
+          this security check and explicitly tell restic to use the executable.
 
 As a more concrete example, suppose you have configured a remote named
 ``b2prod`` for Backblaze B2 with rclone, with a bucket called ``yggdrasil``.

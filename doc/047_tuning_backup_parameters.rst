@@ -19,6 +19,15 @@ values. As the restic commands evolve over time, the optimal value for each para
 can also change across restic versions.
 
 
+Disabling Backup Progress Estimation
+====================================
+
+When you start a backup, restic will concurrently count the number of files and
+their total size, which is used to estimate how long it will take. This will
+cause some extra I/O, which can slow down backups of network file systems or
+FUSE mounts. To avoid this overhead at the cost of not seeing a progress
+estimate, use the ``--no-scan`` option which disables this file scanning.
+
 Backend Connections
 ===================
 
@@ -28,7 +37,7 @@ the REST backend the parameter would be ``-o rest.connections=5``. By default re
 ``5`` connections for each backend, except for the local backend which uses a limit of ``2``.
 The defaults should work well in most cases. For high-latency backends it can be beneficial
 to increase the number of connections. Please be aware that this increases the resource
-consumption of restic and that a too high connection count *will degrade performace*.
+consumption of restic and that a too high connection count *will degrade performance*.
 
 
 CPU Usage
@@ -49,6 +58,16 @@ which will compress very fast), ``max`` (which will trade backup speed and CPU u
 slightly better compression), or ``off`` (which disables compression). Each setting is
 only applied for the single run of restic. The option can also be set via the environment
 variable ``RESTIC_COMPRESSION``.
+
+
+File Read Concurrency
+=====================
+
+When backing up files from fast storage like NVMe disks, it can be beneficial to increase
+the read concurrency. This can increase the overall performance of the backup operation
+by reading more files in parallel. You can specify the concurrency of file reads with the
+``RESTIC_READ_CONCURRENCY`` environment variable or the ``--read-concurrency`` option of
+the ``backup`` command.
 
 
 Pack Size
@@ -72,3 +91,9 @@ of backend connections plus one. For example, if the backend uses 5 connections 
 for most backends), with a target pack size of 64 MiB, you'll need a *minimum* of 384 MiB
 of space in the temp directory. A bit of tuning may be required to strike a balance between
 resource usage at the backup client and the number of pack files in the repository.
+
+Note that larger pack files increase the chance that the temporary pack files are written
+to disk. An operating system usually caches file write operations in memory and writes
+them to disk after a short delay. As larger pack files take longer to upload, this
+increases the chance of these files being written to disk. This can increase disk wear
+for SSDs.

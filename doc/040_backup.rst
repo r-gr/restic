@@ -139,12 +139,23 @@ File change detection
 *********************
 
 When restic encounters a file that has already been backed up, whether in the
-current backup or a previous one, it makes sure the file's contents are only
+current backup or a previous one, it makes sure the file's content is only
 stored once in the repository. To do so, it normally has to scan the entire
-contents of every file. Because this can be very expensive, restic also uses a
+content of the file. Because this can be very expensive, restic also uses a
 change detection rule based on file metadata to determine whether a file is
 likely unchanged since a previous backup. If it is, the file is not scanned
 again.
+
+The previous backup snapshot, called "parent" snaphot in restic terminology,
+is determined as follows. By default restic groups snapshots by hostname and
+backup paths, and then selects the latest snapshot in the group that matches
+the current backup. You can change the selection criteria using the
+``--group-by`` option, which defaults to ``host,paths``. To select the latest
+snapshot with the same paths independent of the hostname, use ``paths``. Or,
+to only consider the hostname and tags, use ``host,tags``. Alternatively, it
+is possible to manually specify a specific parent snapshot using the
+``--parent`` option. Finally, note that one would normally set the
+``--group-by`` option for the ``forget`` command to the same value.
 
 Change detection is only performed for regular files (not special files,
 symlinks or directories) that have the exact same path as they did in a
@@ -203,6 +214,8 @@ Combined with ``--verbose``, you can see a list of changes:
     modified  /plan.txt, saved in 0.000s (9.110 KiB added)
     modified  /archive.tar.gz, saved in 0.140s (25.542 MiB added)
     Would be added to the repository: 25.551 MiB
+
+.. _backup-excluding-files:
 
 Excluding Files
 ***************
@@ -299,7 +312,7 @@ directory, then selectively add back some of them.
 
 ::
 
-    $HOME/**/*
+    $HOME/*
     !$HOME/Documents
     !$HOME/code
     !$HOME/.emacs.d
@@ -555,11 +568,13 @@ environment variables. The following lists these environment variables:
     RESTIC_COMPRESSION                  Compression mode (only available for repository format version 2)
     RESTIC_PROGRESS_FPS                 Frames per second by which the progress bar is updated
     RESTIC_PACK_SIZE                    Target size for pack files
+    RESTIC_READ_CONCURRENCY             Concurrency for file reads
 
     TMPDIR                              Location for temporary files
 
     AWS_ACCESS_KEY_ID                   Amazon S3 access key ID
     AWS_SECRET_ACCESS_KEY               Amazon S3 secret access key
+    AWS_SESSION_TOKEN                   Amazon S3 temporary session token
     AWS_DEFAULT_REGION                  Amazon S3 default region
     AWS_PROFILE                         Amazon credentials profile (alternative to specifying key and region)
     AWS_SHARED_CREDENTIALS_FILE         Location of the AWS CLI shared credentials file (default: ~/.aws/credentials)
