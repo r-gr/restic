@@ -35,15 +35,15 @@ environment variable ``RESTIC_REPOSITORY_FILE``.
 For automating the supply of the repository password to restic, several options
 exist:
 
- * Setting the environment variable ``RESTIC_PASSWORD``
+* Setting the environment variable ``RESTIC_PASSWORD``
 
- * Specifying the path to a file with the password via the option
-   ``--password-file`` or the environment variable ``RESTIC_PASSWORD_FILE``
+* Specifying the path to a file with the password via the option
+  ``--password-file`` or the environment variable ``RESTIC_PASSWORD_FILE``
 
- * Configuring a program to be called when the password is needed via the
-   option ``--password-command`` or the environment variable
-   ``RESTIC_PASSWORD_COMMAND``
-   
+* Configuring a program to be called when the password is needed via the
+  option ``--password-command`` or the environment variable
+  ``RESTIC_PASSWORD_COMMAND``
+
 The ``init`` command has an option called ``--repository-version`` which can
 be used to explicitly set the version of the new repository. By default, the
 current stable version is used (see table below). The alias ``latest`` will
@@ -119,10 +119,10 @@ user's home directory.
 Also, if the SFTP server is enforcing domain-confined users, you can
 specify the user this way: ``user@domain@host``.
 
-.. note:: Please be aware that sftp servers do not expand the tilde character
+.. note:: Please be aware that SFTP servers do not expand the tilde character
           (``~``) normally used as an alias for a user's home directory. If you
           want to specify a path relative to the user's home directory, pass a
-          relative path to the sftp backend.
+          relative path to the SFTP backend.
 
 If you need to specify a port number or IPv6 address, you'll need to use
 URL syntax. E.g., the repository ``/srv/restic-repo`` on ``[::1]`` (localhost)
@@ -172,9 +172,11 @@ Then use it in the backend specification:
 
 Last, if you'd like to use an entirely different program to create the
 SFTP connection, you can specify the command to be run with the option
-``-o sftp.command="foobar"``.
+``-o sftp.command="foobar"``. Alternatively, ``-o sftp.args`` allows
+setting the arguments passed to the default SSH command (ignored when
+``sftp.command`` is set)
 
-.. note:: Please be aware that sftp servers close connections when no data is
+.. note:: Please be aware that SFTP servers close connections when no data is
           received by the client. This can happen when restic is processing huge
           amounts of unchanged data. To avoid this issue add the following lines 
           to the client's .ssh/config file:
@@ -199,15 +201,24 @@ scheme like this:
     $ restic -r rest:http://host:8000/ init
 
 Depending on your REST server setup, you can use HTTPS protocol,
-password protection, multiple repositories or any combination of
-those features. The TCP/IP port is also configurable. Here
-are some more examples:
+unix socket, password protection, multiple repositories or any
+combination of those features. The TCP/IP port is also configurable.
+Here are some more examples:
 
 .. code-block:: console
 
     $ restic -r rest:https://host:8000/ init
     $ restic -r rest:https://user:pass@host:8000/ init
     $ restic -r rest:https://user:pass@host:8000/my_backup_repo/ init
+    $ restic -r rest:http+unix:///tmp/rest.socket:/my_backup_repo/ init
+
+The server username and password can be specified using environment
+variables as well:
+
+.. code-block:: console
+
+    $ export RESTIC_REST_USERNAME=<MY_REST_SERVER_USERNAME>
+    $ export RESTIC_REST_PASSWORD=<MY_REST_SERVER_PASSWORD>
 
 If you use TLS, restic will use the system's CA certificates to verify the
 server certificate. When the verification fails, restic refuses to proceed and
@@ -273,7 +284,7 @@ For an S3-compatible server that is not Amazon (like Minio, see below),
 or is only available via HTTP, you can specify the URL to the server
 like this: ``s3:http://server:port/bucket_name``.
           
-.. note:: restic expects `path-style URLs <https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro>`__
+.. note:: restic expects `path-style URLs <https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-bucket-intro.html>`__
           like for example ``s3.us-west-2.amazonaws.com/bucket_name``.
           Virtual-hosted–style URLs like ``bucket_name.s3.us-west-2.amazonaws.com``,
           where the bucket name is part of the hostname are not supported. These must
@@ -290,12 +301,11 @@ like this: ``s3:http://server:port/bucket_name``.
 Minio Server
 ************
 
-`Minio <https://www.minio.io>`__ is an Open Source Object Storage,
+`Minio <https://min.io/>`__ is an Open Source Object Storage,
 written in Go and compatible with Amazon S3 API.
 
--  Download and Install `Minio
-   Server <https://minio.io/downloads/#minio-server>`__.
--  You can also refer to https://docs.minio.io for step by step guidance
+-  Download and Install `Minio Download <https://min.io/download#/linux>`__.
+-  You can also refer to `Minio Docs <https://min.io/docs/minio/linux/>`__ for step by step guidance
    on installation and getting started on Minio Client and Minio Server.
 
 You must first setup the following environment variables with the
@@ -322,7 +332,7 @@ Wasabi
 ************
 
 `Wasabi <https://wasabi.com>`__ is a low cost Amazon S3 conformant object storage provider.
-Due to it's S3 conformance, Wasabi can be used as a storage provider for a restic repository.
+Due to its S3 conformance, Wasabi can be used as a storage provider for a restic repository.
 
 -  Create a Wasabi bucket using the `Wasabi Console <https://console.wasabisys.com>`__.
 -  Determine the correct Wasabi service URL for your bucket `here <https://wasabi-support.zendesk.com/hc/en-us/articles/360015106031-What-are-the-service-URLs-for-Wasabi-s-different-regions->`__.
@@ -350,7 +360,7 @@ this command.
 Alibaba Cloud (Aliyun) Object Storage System (OSS)
 **************************************************
 
-`Alibaba OSS <https://www.alibabacloud.com/product/oss/>`__ is an
+`Alibaba OSS <https://www.alibabacloud.com/product/object-storage-service>`__ is an
 encrypted, secure, cost-effective, and easy-to-use object storage
 service that enables you to store, back up, and archive large amounts
 of data in the cloud.
@@ -358,7 +368,7 @@ of data in the cloud.
 Alibaba OSS is S3 compatible so it can be used as a storage provider
 for a restic repository with a couple of extra parameters.
 
--  Determine the correct `Alibaba OSS region endpoint <https://www.alibabacloud.com/help/doc-detail/31837.htm>`__ - this will be something like ``oss-eu-west-1.aliyuncs.com``
+-  Determine the correct `Alibaba OSS region endpoint <https://www.alibabacloud.com/help/en/object-storage-service/latest/regions-and-endpoints>`__ - this will be something like ``oss-eu-west-1.aliyuncs.com``
 -  You'll need the region name too - this will be something like ``oss-eu-west-1``
 
 You must first setup the following environment variables with the
@@ -441,7 +451,7 @@ the naming convention of those variables follows the official Python Swift clien
 
 
 Restic should be compatible with an `OpenStack RC file
-<https://docs.openstack.org/user-guide/common/cli-set-environment-variables-using-openstack-rc.html>`__
+<https://docs.openstack.org/ocata/admin-guide/common/cli-set-environment-variables-using-openstack-rc.html>`__
 in most cases.
 
 Once environment variables are set up, a new repository can be created. The
@@ -478,7 +488,8 @@ Backblaze B2
 
    Different from the B2 backend, restic's S3 backend will only hide no longer
    necessary files. Thus, make sure to setup lifecycle rules to eventually
-   delete hidden files.
+   delete hidden files. The lifecycle setting "Keep only the last version of the file" 
+   will keep only the most current version of a file. Read the [Backblaze documentation](https://www.backblaze.com/docs/cloud-storage-lifecycle-rules).
 
 Restic can backup data to any Backblaze B2 bucket. You need to first setup the
 following environment variables with the credentials you can find in the
@@ -524,19 +535,44 @@ Microsoft Azure Blob Storage
 ****************************
 
 You can also store backups on Microsoft Azure Blob Storage. Export the Azure
-Blob Storage account name and key as follows:
+Blob Storage account name:
 
 .. code-block:: console
 
     $ export AZURE_ACCOUNT_NAME=<ACCOUNT_NAME>
+
+For authentication export one of the following variables:
+
+.. code-block:: console
+
+    # For storage account key
     $ export AZURE_ACCOUNT_KEY=<SECRET_KEY>
+    # For SAS
+    $ export AZURE_ACCOUNT_SAS=<SAS_TOKEN>
 
-or
+For authentication using ``az login`` ensure the user has
+the minimum permissions of the role assignment ``Storage Blob Data Contributor`` on Azure RBAC
+for the storage account.
 
 .. code-block:: console
 
-    $ export AZURE_ACCOUNT_NAME=<ACCOUNT_NAME>
-    $ export AZURE_ACCOUNT_SAS=<SAS_TOKEN>
+    $ az login
+
+Alternatively, if run on Azure, restic will automatically use service accounts configured
+via the standard environment variables or Workload / Managed Identities.
+
+To enforce the use of the Azure CLI credential when other credentials are present, set the following environment variable:
+
+.. code-block:: console
+
+    $ export AZURE_FORCE_CLI_CREDENTIAL=true
+
+Restic will by default use Azure's global domain ``core.windows.net`` as endpoint suffix.
+You can specify other suffixes as follows:
+
+.. code-block:: console
+
+    $ export AZURE_ENDPOINT_SUFFIX=<ENDPOINT_SUFFIX>
 
 Afterwards you can initialize a repository in a container called ``foo`` in the
 root path like this:
@@ -614,9 +650,11 @@ The number of concurrent connections to the GCS service can be set with the
 ``-o gs.connections=10`` switch. By default, at most five parallel connections are
 established.
 
-.. _service account: https://cloud.google.com/iam/docs/service-accounts
-.. _create a service account key: https://cloud.google.com/iam/docs/creating-managing-service-account-keys#iam-service-account-keys-create-console
-.. _default authentication material: https://cloud.google.com/docs/authentication/production
+The region, where a bucket should be created, can be specified with the ``-o gs.region=us`` switch. By default, the region is set to ``us``.
+
+.. _service account: https://cloud.google.com/iam/docs/service-account-overview
+.. _create a service account key: https://cloud.google.com/iam/docs/keys-create-delete
+.. _default authentication material: https://cloud.google.com/docs/authentication#service-accounts
 
 .. _other-services:
 
@@ -686,9 +724,9 @@ For debugging rclone, you can set the environment variable ``RCLONE_VERBOSE=2``.
 
 The rclone backend has three additional options:
 
- * ``-o rclone.program`` specifies the path to rclone, the default value is just ``rclone``
- * ``-o rclone.args`` allows setting the arguments passed to rclone, by default this is ``serve restic --stdio --b2-hard-delete``
- * ``-o rclone.timeout`` specifies timeout for waiting on repository opening, the default value is ``1m``
+* ``-o rclone.program`` specifies the path to rclone, the default value is just ``rclone``
+* ``-o rclone.args`` allows setting the arguments passed to rclone, by default this is ``serve restic --stdio --b2-hard-delete``
+* ``-o rclone.timeout`` specifies timeout for waiting on repository opening, the default value is ``1m``
 
 The reason for the ``--b2-hard-delete`` parameters can be found in the corresponding GitHub `issue #1657`_.
 
@@ -748,7 +786,7 @@ Password prompt on Windows
 
 At the moment, restic only supports the default Windows console
 interaction. If you use emulation environments like
-`MSYS2 <https://msys2.github.io/>`__ or
+`MSYS2 <https://www.msys2.org/>`__ or
 `Cygwin <https://www.cygwin.com/>`__, which use terminals like
 ``Mintty`` or ``rxvt``, you may get a password error.
 
@@ -800,7 +838,7 @@ To make this work we can employ the help of the ``setgid`` permission bit
 available on Linux and most other Unix systems. This permission bit makes
 newly created directories inherit both the group owner (gid) and setgid bit
 from the parent directory. Setting this bit requires root but since it
-propagates down to any new directories we only have to do this priviledged
+propagates down to any new directories we only have to do this privileged
 setup once:
 
 .. code-block:: console
@@ -814,3 +852,26 @@ and then grants read/write permissions for group access.
 .. note:: To manage who has access to the repository you can use
           ``usermod`` on Linux systems, to change which group controls
           repository access ``chgrp -R`` is your friend.
+
+
+Repositories with empty password
+********************************
+
+Restic by default refuses to create or operate on repositories that use an
+empty password. Since restic 0.17.0, the option ``--insecure-no-password`` allows
+disabling this check. Restic will not prompt for a password when using this option.
+Specifying ``--insecure-no-password`` while also passing a password to restic
+via a CLI option or via environment variable results in an error.
+
+For security reasons, the option must always be specified when operating on
+repositories with an empty password. For example to create a new repository
+with an empty password, use the following command.
+
+.. code-block:: console
+
+    restic init --insecure-no-password
+
+
+The ``init`` and ``copy`` command also support the option ``--from-insecure-no-password``
+which applies to the source repository. The ``key add`` and ``key passwd`` commands
+include the ``--new-insecure-no-password`` option to add or set and empty password.

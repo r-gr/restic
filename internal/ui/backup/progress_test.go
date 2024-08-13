@@ -15,12 +15,12 @@ type mockPrinter struct {
 	id                    restic.ID
 }
 
-func (p *mockPrinter) Update(total, processed Counter, errors uint, currentFiles map[string]struct{}, start time.Time, secs uint64) {
+func (p *mockPrinter) Update(_, _ Counter, _ uint, _ map[string]struct{}, _ time.Time, _ uint64) {
 }
-func (p *mockPrinter) Error(item string, err error) error        { return err }
-func (p *mockPrinter) ScannerError(item string, err error) error { return err }
+func (p *mockPrinter) Error(_ string, err error) error        { return err }
+func (p *mockPrinter) ScannerError(_ string, err error) error { return err }
 
-func (p *mockPrinter) CompleteItem(messageType string, item string, previous, current *restic.Node, s archiver.ItemStats, d time.Duration) {
+func (p *mockPrinter) CompleteItem(messageType string, _ string, _ archiver.ItemStats, _ time.Duration) {
 	p.Lock()
 	defer p.Unlock()
 
@@ -32,19 +32,18 @@ func (p *mockPrinter) CompleteItem(messageType string, item string, previous, cu
 	}
 }
 
-func (p *mockPrinter) ReportTotal(_ string, _ time.Time, _ archiver.ScanStats) {}
-func (p *mockPrinter) Finish(id restic.ID, _ time.Time, summary *Summary, dryRun bool) {
+func (p *mockPrinter) ReportTotal(_ time.Time, _ archiver.ScanStats) {}
+func (p *mockPrinter) Finish(id restic.ID, _ time.Time, _ *archiver.Summary, _ bool) {
 	p.Lock()
 	defer p.Unlock()
 
-	_ = *summary // Should not be nil.
 	p.id = id
 }
 
 func (p *mockPrinter) Reset() {}
 
-func (p *mockPrinter) P(msg string, args ...interface{}) {}
-func (p *mockPrinter) V(msg string, args ...interface{}) {}
+func (p *mockPrinter) P(_ string, _ ...interface{}) {}
+func (p *mockPrinter) V(_ string, _ ...interface{}) {}
 
 func TestProgress(t *testing.T) {
 	t.Parallel()
@@ -64,7 +63,7 @@ func TestProgress(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 	id := restic.NewRandomID()
-	prog.Finish(id, false)
+	prog.Finish(id, nil, false)
 
 	if !prnt.dirUnchanged {
 		t.Error(`"dir unchanged" event not seen`)

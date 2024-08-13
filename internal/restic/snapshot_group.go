@@ -2,10 +2,9 @@ package restic
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/restic/restic/internal/errors"
 )
 
 type SnapshotGroupByOptions struct {
@@ -26,7 +25,7 @@ func splitSnapshotGroupBy(s string) (SnapshotGroupByOptions, error) {
 			l.Tag = true
 		case "":
 		default:
-			return SnapshotGroupByOptions{}, errors.Fatal("unknown grouping option: '" + option + "'")
+			return SnapshotGroupByOptions{}, fmt.Errorf("unknown grouping option: %q", option)
 		}
 	}
 	return l, nil
@@ -67,8 +66,22 @@ type SnapshotGroupKey struct {
 	Tags     []string `json:"tags"`
 }
 
+func (s *SnapshotGroupKey) String() string {
+	var parts []string
+	if s.Hostname != "" {
+		parts = append(parts, fmt.Sprintf("host %v", s.Hostname))
+	}
+	if len(s.Paths) != 0 {
+		parts = append(parts, fmt.Sprintf("path %v", s.Paths))
+	}
+	if len(s.Tags) != 0 {
+		parts = append(parts, fmt.Sprintf("tags %v", s.Tags))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // GroupSnapshots takes a list of snapshots and a grouping criteria and creates
-// a group list of snapshots.
+// a grouped list of snapshots.
 func GroupSnapshots(snapshots Snapshots, groupBy SnapshotGroupByOptions) (map[string]Snapshots, bool, error) {
 	// group by hostname and dirs
 	snapshotGroups := make(map[string]Snapshots)

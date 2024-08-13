@@ -19,7 +19,9 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/restic/restic/internal/backend"
 	"github.com/restic/restic/internal/backend/limiter"
+	"github.com/restic/restic/internal/backend/location"
 	"github.com/restic/restic/internal/backend/rest"
+	"github.com/restic/restic/internal/backend/util"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
 	"golang.org/x/net/http2"
@@ -34,6 +36,10 @@ type Backend struct {
 	waitResult error
 	wg         *sync.WaitGroup
 	conn       *StdioConn
+}
+
+func NewFactory() location.Factory {
+	return location.NewLimitedBackendFactory("rclone", ParseConfig, location.NoPassword, Create, Open)
 }
 
 // run starts command with args and initializes the StdioConn.
@@ -76,7 +82,7 @@ func run(command string, args ...string) (*StdioConn, *sync.WaitGroup, chan stru
 	cmd.Stdin = r
 	cmd.Stdout = w
 
-	bg, err := backend.StartForeground(cmd)
+	bg, err := util.StartForeground(cmd)
 	// close rclone side of pipes
 	errR := r.Close()
 	errW := w.Close()
@@ -88,7 +94,7 @@ func run(command string, args ...string) (*StdioConn, *sync.WaitGroup, chan stru
 		err = errW
 	}
 	if err != nil {
-		if backend.IsErrDot(err) {
+		if errors.Is(err, exec.ErrDot) {
 			return nil, nil, nil, nil, errors.Errorf("cannot implicitly run relative executable %v found in current directory, use -o rclone.program=./<program> to override", cmd.Path)
 		}
 		return nil, nil, nil, nil, err
@@ -134,7 +140,7 @@ func wrapConn(c *StdioConn, lim limiter.Limiter) *wrappedConn {
 }
 
 // New initializes a Backend and starts the process.
-func newBackend(cfg Config, lim limiter.Limiter) (*Backend, error) {
+func newBackend(ctx context.Context, cfg Config, lim limiter.Limiter) (*Backend, error) {
 	var (
 		args []string
 		err  error
@@ -177,7 +183,7 @@ func newBackend(cfg Config, lim limiter.Limiter) (*Backend, error) {
 	dialCount := 0
 	tr := &http2.Transport{
 		AllowHTTP: true, // this is not really HTTP, just stdin/stdout
-		DialTLS: func(network, address string, cfg *tls.Config) (net.Conn, error) {
+		DialTLS: func(network, address string, _ *tls.Config) (net.Conn, error) {
 			debug.Log("new connection requested, %v %v", network, address)
 			if dialCount > 0 {
 				// the connection to the child process is already closed
@@ -197,7 +203,7 @@ func newBackend(cfg Config, lim limiter.Limiter) (*Backend, error) {
 		wg:     wg,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	wg.Add(1)
@@ -246,6 +252,7 @@ func newBackend(cfg Config, lim limiter.Limiter) (*Backend, error) {
 		return nil, fmt.Errorf("error talking HTTP to rclone: %w", err)
 	}
 
+	_ = res.Body.Close()
 	debug.Log("HTTP status %q returned, moving instance to background", res.Status)
 	err = bg()
 	if err != nil {
@@ -256,8 +263,8 @@ func newBackend(cfg Config, lim limiter.Limiter) (*Backend, error) {
 }
 
 // Open starts an rclone process with the given config.
-func Open(cfg Config, lim limiter.Limiter) (*Backend, error) {
-	be, err := newBackend(cfg, lim)
+func Open(ctx context.Context, cfg Config, lim limiter.Limiter) (*Backend, error) {
+	be, err := newBackend(ctx, cfg, lim)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +279,7 @@ func Open(cfg Config, lim limiter.Limiter) (*Backend, error) {
 		URL:         url,
 	}
 
-	restBackend, err := rest.Open(restConfig, debug.RoundTripper(be.tr))
+	restBackend, err := rest.Open(ctx, restConfig, debug.RoundTripper(be.tr))
 	if err != nil {
 		_ = be.Close()
 		return nil, err
@@ -283,8 +290,8 @@ func Open(cfg Config, lim limiter.Limiter) (*Backend, error) {
 }
 
 // Create initializes a new restic repo with rclone.
-func Create(ctx context.Context, cfg Config) (*Backend, error) {
-	be, err := newBackend(cfg, nil)
+func Create(ctx context.Context, cfg Config, lim limiter.Limiter) (*Backend, error) {
+	be, err := newBackend(ctx, cfg, lim)
 	if err != nil {
 		return nil, err
 	}

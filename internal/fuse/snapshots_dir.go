@@ -6,6 +6,7 @@ package fuse
 import (
 	"context"
 	"os"
+	"syscall"
 
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/restic"
@@ -41,7 +42,7 @@ func NewSnapshotsDir(root *Root, inode, parentInode uint64, dirStruct *Snapshots
 }
 
 // Attr returns the attributes for any dir in the snapshots directory structure
-func (d *SnapshotsDir) Attr(ctx context.Context, attr *fuse.Attr) error {
+func (d *SnapshotsDir) Attr(_ context.Context, attr *fuse.Attr) error {
 	attr.Inode = d.inode
 	attr.Mode = os.ModeDir | 0555
 	attr.Uid = d.root.uid
@@ -60,7 +61,7 @@ func (d *SnapshotsDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	if err != nil {
 		return nil, unwrapCtxCanceled(err)
 	} else if meta == nil {
-		return nil, fuse.ENOENT
+		return nil, syscall.ENOENT
 	}
 
 	items := []fuse.Dirent{
@@ -77,6 +78,10 @@ func (d *SnapshotsDir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	}
 
 	for name, entry := range meta.names {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		d := fuse.Dirent{
 			Inode: inodeFromName(d.inode, name),
 			Name:  name,
@@ -99,7 +104,7 @@ func (d *SnapshotsDir) Lookup(ctx context.Context, name string) (fs.Node, error)
 	if err != nil {
 		return nil, unwrapCtxCanceled(err)
 	} else if meta == nil {
-		return nil, fuse.ENOENT
+		return nil, syscall.ENOENT
 	}
 
 	entry := meta.names[name]
@@ -109,12 +114,11 @@ func (d *SnapshotsDir) Lookup(ctx context.Context, name string) (fs.Node, error)
 			return newSnapshotLink(d.root, inode, entry.linkTarget, entry.snapshot)
 		} else if entry.snapshot != nil {
 			return newDirFromSnapshot(d.root, inode, entry.snapshot)
-		} else {
-			return NewSnapshotsDir(d.root, inode, d.inode, d.dirStruct, d.prefix+"/"+name), nil
 		}
+		return NewSnapshotsDir(d.root, inode, d.inode, d.dirStruct, d.prefix+"/"+name), nil
 	}
 
-	return nil, fuse.ENOENT
+	return nil, syscall.ENOENT
 }
 
 // SnapshotLink
@@ -133,16 +137,16 @@ func newSnapshotLink(root *Root, inode uint64, target string, snapshot *restic.S
 }
 
 // Readlink
-func (l *snapshotLink) Readlink(ctx context.Context, req *fuse.ReadlinkRequest) (string, error) {
+func (l *snapshotLink) Readlink(_ context.Context, _ *fuse.ReadlinkRequest) (string, error) {
 	return l.target, nil
 }
 
 // Attr
-func (l *snapshotLink) Attr(ctx context.Context, a *fuse.Attr) error {
+func (l *snapshotLink) Attr(_ context.Context, a *fuse.Attr) error {
 	a.Inode = l.inode
 	a.Mode = os.ModeSymlink | 0777
 	a.Size = uint64(len(l.target))
-	a.Blocks = 1 + a.Size/blockSize
+	a.Blocks = (a.Size + blockSize - 1) / blockSize
 	a.Uid = l.root.uid
 	a.Gid = l.root.gid
 	a.Atime = l.snapshot.Time

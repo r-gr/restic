@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/restic/restic/internal/fs"
 	"github.com/restic/restic/internal/repository"
 	"github.com/restic/restic/internal/textfile"
+	"github.com/restic/restic/internal/ui"
 	"github.com/spf13/pflag"
 )
 
@@ -364,7 +364,7 @@ func rejectResticCache(repo *repository.Repository) (RejectByNameFunc, error) {
 }
 
 func rejectBySize(maxSizeStr string) (RejectFunc, error) {
-	maxSize, err := parseSizeStr(maxSizeStr)
+	maxSize, err := ui.ParseBytes(maxSizeStr)
 	if err != nil {
 		return nil, err
 	}
@@ -385,41 +385,12 @@ func rejectBySize(maxSizeStr string) (RejectFunc, error) {
 	}, nil
 }
 
-func parseSizeStr(sizeStr string) (int64, error) {
-	if sizeStr == "" {
-		return 0, errors.New("expected size, got empty string")
-	}
-
-	numStr := sizeStr[:len(sizeStr)-1]
-	var unit int64 = 1
-
-	switch sizeStr[len(sizeStr)-1] {
-	case 'b', 'B':
-		// use initialized values, do nothing here
-	case 'k', 'K':
-		unit = 1024
-	case 'm', 'M':
-		unit = 1024 * 1024
-	case 'g', 'G':
-		unit = 1024 * 1024 * 1024
-	case 't', 'T':
-		unit = 1024 * 1024 * 1024 * 1024
-	default:
-		numStr = sizeStr
-	}
-	value, err := strconv.ParseInt(numStr, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return value * unit, nil
-}
-
-// readExcludePatternsFromFiles reads all exclude files and returns the list of
-// exclude patterns. For each line, leading and trailing white space is removed
+// readPatternsFromFiles reads all files and returns the list of
+// patterns. For each line, leading and trailing white space is removed
 // and comment lines are ignored. For each remaining pattern, environment
 // variables are resolved. For adding a literal dollar sign ($), write $$ to
 // the file.
-func readExcludePatternsFromFiles(excludeFiles []string) ([]string, error) {
+func readPatternsFromFiles(files []string) ([]string, error) {
 	getenvOrDollar := func(s string) string {
 		if s == "$" {
 			return "$"
@@ -427,8 +398,8 @@ func readExcludePatternsFromFiles(excludeFiles []string) ([]string, error) {
 		return os.Getenv(s)
 	}
 
-	var excludes []string
-	for _, filename := range excludeFiles {
+	var patterns []string
+	for _, filename := range files {
 		err := func() (err error) {
 			data, err := textfile.Read(filename)
 			if err != nil {
@@ -450,15 +421,15 @@ func readExcludePatternsFromFiles(excludeFiles []string) ([]string, error) {
 				}
 
 				line = os.Expand(line, getenvOrDollar)
-				excludes = append(excludes, line)
+				patterns = append(patterns, line)
 			}
 			return scanner.Err()
 		}()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read patterns from file %q: %w", filename, err)
 		}
 	}
-	return excludes, nil
+	return patterns, nil
 }
 
 type excludePatternOptions struct {
@@ -483,7 +454,7 @@ func (opts excludePatternOptions) CollectPatterns() ([]RejectByNameFunc, error) 
 	var fs []RejectByNameFunc
 	// add patterns from file
 	if len(opts.ExcludeFiles) > 0 {
-		excludePatterns, err := readExcludePatternsFromFiles(opts.ExcludeFiles)
+		excludePatterns, err := readPatternsFromFiles(opts.ExcludeFiles)
 		if err != nil {
 			return nil, err
 		}
@@ -496,7 +467,7 @@ func (opts excludePatternOptions) CollectPatterns() ([]RejectByNameFunc, error) 
 	}
 
 	if len(opts.InsensitiveExcludeFiles) > 0 {
-		excludes, err := readExcludePatternsFromFiles(opts.InsensitiveExcludeFiles)
+		excludes, err := readPatternsFromFiles(opts.InsensitiveExcludeFiles)
 		if err != nil {
 			return nil, err
 		}

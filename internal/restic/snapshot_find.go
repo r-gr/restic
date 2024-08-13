@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/restic/restic/internal/errors"
@@ -23,7 +24,7 @@ type SnapshotFilter struct {
 	TimestampLimit time.Time
 }
 
-func (f *SnapshotFilter) empty() bool {
+func (f *SnapshotFilter) Empty() bool {
 	return len(f.Hosts)+len(f.Tags)+len(f.Paths) == 0
 }
 
@@ -46,6 +47,7 @@ func (f *SnapshotFilter) findLatest(ctx context.Context, be Lister, loader Loade
 		}
 		absTargets = append(absTargets, filepath.Clean(target))
 	}
+	f.Paths = absTargets
 
 	var latest *Snapshot
 
@@ -81,36 +83,47 @@ func (f *SnapshotFilter) findLatest(ctx context.Context, be Lister, loader Loade
 	return latest, nil
 }
 
+func splitSnapshotID(s string) (id, subfolder string) {
+	id, subfolder, _ = strings.Cut(s, ":")
+	return
+}
+
 // FindSnapshot takes a string and tries to find a snapshot whose ID matches
 // the string as closely as possible.
-func FindSnapshot(ctx context.Context, be Lister, loader LoaderUnpacked, s string) (*Snapshot, error) {
+func FindSnapshot(ctx context.Context, be Lister, loader LoaderUnpacked, s string) (*Snapshot, string, error) {
+	s, subfolder := splitSnapshotID(s)
+
 	// no need to list snapshots if `s` is already a full id
 	id, err := ParseID(s)
 	if err != nil {
 		// find snapshot id with prefix
 		id, err = Find(ctx, be, SnapshotFile, s)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return LoadSnapshot(ctx, loader, id)
+	sn, err := LoadSnapshot(ctx, loader, id)
+	return sn, subfolder, err
 }
 
 // FindLatest returns either the latest of a filtered list of all snapshots
 // or a snapshot specified by `snapshotID`.
-func (f *SnapshotFilter) FindLatest(ctx context.Context, be Lister, loader LoaderUnpacked, snapshotID string) (*Snapshot, error) {
-	if snapshotID == "latest" {
+func (f *SnapshotFilter) FindLatest(ctx context.Context, be Lister, loader LoaderUnpacked, snapshotID string) (*Snapshot, string, error) {
+	id, subfolder := splitSnapshotID(snapshotID)
+	if id == "latest" {
 		sn, err := f.findLatest(ctx, be, loader)
 		if err == ErrNoSnapshotFound {
 			err = fmt.Errorf("snapshot filter (Paths:%v Tags:%v Hosts:%v): %w",
 				f.Paths, f.Tags, f.Hosts, err)
 		}
-		return sn, err
+		return sn, subfolder, err
 	}
 	return FindSnapshot(ctx, be, loader, snapshotID)
 }
 
 type SnapshotFindCb func(string, *Snapshot, error) error
+
+var ErrInvalidSnapshotSyntax = errors.New("<snapshot>:<subfolder> syntax not allowed")
 
 // FindAll yields Snapshots, either given explicitly by `snapshotIDs` or filtered from the list of all snapshots.
 func (f *SnapshotFilter) FindAll(ctx context.Context, be Lister, loader LoaderUnpacked, snapshotIDs []string, fn SnapshotFindCb) error {
@@ -121,6 +134,10 @@ func (f *SnapshotFilter) FindAll(ctx context.Context, be Lister, loader LoaderUn
 		ids := NewIDSet()
 		// Process all snapshot IDs given as arguments.
 		for _, s := range snapshotIDs {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
 			var sn *Snapshot
 			if s == "latest" {
 				if usedFilter {
@@ -137,15 +154,20 @@ func (f *SnapshotFilter) FindAll(ctx context.Context, be Lister, loader LoaderUn
 				if sn != nil {
 					ids.Insert(*sn.ID())
 				}
+			} else if strings.HasPrefix(s, "latest:") {
+				err = ErrInvalidSnapshotSyntax
 			} else {
-				sn, err = FindSnapshot(ctx, be, loader, s)
-				if err == nil {
+				var subfolder string
+				sn, subfolder, err = FindSnapshot(ctx, be, loader, s)
+				if err == nil && subfolder != "" {
+					err = ErrInvalidSnapshotSyntax
+				} else if err == nil {
 					if ids.Has(*sn.ID()) {
 						continue
-					} else {
-						ids.Insert(*sn.ID())
-						s = sn.ID().String()
 					}
+
+					ids.Insert(*sn.ID())
+					s = sn.ID().String()
 				}
 			}
 			err = fn(s, sn, err)
@@ -155,7 +177,7 @@ func (f *SnapshotFilter) FindAll(ctx context.Context, be Lister, loader LoaderUn
 		}
 
 		// Give the user some indication their filters are not used.
-		if !usedFilter && !f.empty() {
+		if !usedFilter && !f.Empty() {
 			return fn("filters", nil, errors.Errorf("explicit snapshot ids are given"))
 		}
 		return nil

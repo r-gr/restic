@@ -15,17 +15,19 @@ import (
 type TextProgress struct {
 	*ui.Message
 
-	term *termstatus.Terminal
+	term      ui.Terminal
+	verbosity uint
 }
 
 // assert that Backup implements the ProgressPrinter interface
 var _ ProgressPrinter = &TextProgress{}
 
 // NewTextProgress returns a new backup progress reporter.
-func NewTextProgress(term *termstatus.Terminal, verbosity uint) *TextProgress {
+func NewTextProgress(term ui.Terminal, verbosity uint) *TextProgress {
 	return &TextProgress{
-		Message: ui.NewMessage(term, verbosity),
-		term:    term,
+		Message:   ui.NewMessage(term, verbosity),
+		term:      term,
+		verbosity: verbosity,
 	}
 }
 
@@ -72,20 +74,24 @@ func (b *TextProgress) Update(total, processed Counter, errors uint, currentFile
 
 // ScannerError is the error callback function for the scanner, it prints the
 // error in verbose mode and returns nil.
-func (b *TextProgress) ScannerError(item string, err error) error {
-	b.V("scan: %v\n", err)
+func (b *TextProgress) ScannerError(_ string, err error) error {
+	if b.verbosity >= 2 {
+		b.E("scan: %v\n", err)
+	}
 	return nil
 }
 
 // Error is the error callback function for the archiver, it prints the error and returns nil.
-func (b *TextProgress) Error(item string, err error) error {
+func (b *TextProgress) Error(_ string, err error) error {
 	b.E("error: %v\n", err)
 	return nil
 }
 
 // CompleteItem is the status callback function for the archiver when a
 // file/dir has been saved successfully.
-func (b *TextProgress) CompleteItem(messageType, item string, previous, current *restic.Node, s archiver.ItemStats, d time.Duration) {
+func (b *TextProgress) CompleteItem(messageType, item string, s archiver.ItemStats, d time.Duration) {
+	item = termstatus.Quote(item)
+
 	switch messageType {
 	case "dir new":
 		b.VV("new       %v, saved in %.3fs (%v added, %v stored, %v metadata)",
@@ -109,7 +115,7 @@ func (b *TextProgress) CompleteItem(messageType, item string, previous, current 
 }
 
 // ReportTotal sets the total stats up to now
-func (b *TextProgress) ReportTotal(item string, start time.Time, s archiver.ScanStats) {
+func (b *TextProgress) ReportTotal(start time.Time, s archiver.ScanStats) {
 	b.V("scan finished in %.3fs: %v files, %s",
 		time.Since(start).Seconds(),
 		s.Files, ui.FormatBytes(s.Bytes),
@@ -119,12 +125,12 @@ func (b *TextProgress) ReportTotal(item string, start time.Time, s archiver.Scan
 // Reset status
 func (b *TextProgress) Reset() {
 	if b.term.CanUpdateStatus() {
-		b.term.SetStatus([]string{""})
+		b.term.SetStatus(nil)
 	}
 }
 
 // Finish prints the finishing messages.
-func (b *TextProgress) Finish(snapshotID restic.ID, start time.Time, summary *Summary, dryRun bool) {
+func (b *TextProgress) Finish(id restic.ID, start time.Time, summary *archiver.Summary, dryRun bool) {
 	b.P("\n")
 	b.P("Files:       %5d new, %5d changed, %5d unmodified\n", summary.Files.New, summary.Files.Changed, summary.Files.Unchanged)
 	b.P("Dirs:        %5d new, %5d changed, %5d unmodified\n", summary.Dirs.New, summary.Dirs.Changed, summary.Dirs.Unchanged)
@@ -143,4 +149,12 @@ func (b *TextProgress) Finish(snapshotID restic.ID, start time.Time, summary *Su
 		ui.FormatBytes(summary.ProcessedBytes),
 		ui.FormatDuration(time.Since(start)),
 	)
+
+	if !dryRun {
+		if id.IsNull() {
+			b.P("skipped creating snapshot\n")
+		} else {
+			b.P("snapshot %s saved\n", id.Str())
+		}
+	}
 }

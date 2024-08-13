@@ -8,6 +8,7 @@ import (
 	"context"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func testRead(t testing.TB, f fs.Handle, offset, length int, data []byte) {
 	rtest.OK(t, fr.Read(ctx, req, resp))
 }
 
-func firstSnapshotID(t testing.TB, repo restic.Repository) (first restic.ID) {
+func firstSnapshotID(t testing.TB, repo restic.Lister) (first restic.ID) {
 	err := repo.List(context.TODO(), restic.SnapshotFile, func(id restic.ID, size int64) error {
 		if first.IsNull() {
 			first = id
@@ -51,14 +52,14 @@ func firstSnapshotID(t testing.TB, repo restic.Repository) (first restic.ID) {
 	return first
 }
 
-func loadFirstSnapshot(t testing.TB, repo restic.Repository) *restic.Snapshot {
+func loadFirstSnapshot(t testing.TB, repo restic.ListerLoaderUnpacked) *restic.Snapshot {
 	id := firstSnapshotID(t, repo)
 	sn, err := restic.LoadSnapshot(context.TODO(), repo, id)
 	rtest.OK(t, err)
 	return sn
 }
 
-func loadTree(t testing.TB, repo restic.Repository, id restic.ID) *restic.Tree {
+func loadTree(t testing.TB, repo restic.Loader, id restic.ID) *restic.Tree {
 	tree, err := restic.LoadTree(context.TODO(), repo, id)
 	rtest.OK(t, err)
 	return tree
@@ -72,7 +73,7 @@ func TestFuseFile(t *testing.T) {
 
 	timestamp, err := time.Parse(time.RFC3339, "2017-01-24T10:42:56+01:00")
 	rtest.OK(t, err)
-	restic.TestCreateSnapshot(t, repo, timestamp, 2, 0.1)
+	restic.TestCreateSnapshot(t, repo, timestamp, 2)
 
 	sn := loadFirstSnapshot(t, repo)
 	tree := loadTree(t, repo, *sn.Tree)
@@ -88,7 +89,7 @@ func TestFuseFile(t *testing.T) {
 		memfile  []byte
 	)
 	for _, id := range content {
-		size, found := repo.LookupBlobSize(id, restic.DataBlob)
+		size, found := repo.LookupBlobSize(restic.DataBlob, id)
 		rtest.Assert(t, found, "Expected to find blob id %v", id)
 		filesize += uint64(size)
 
@@ -179,7 +180,7 @@ func TestFuseDir(t *testing.T) {
 // Test top-level directories for their UID and GID.
 func TestTopUIDGID(t *testing.T) {
 	repo := repository.TestRepository(t)
-	restic.TestCreateSnapshot(t, repo, time.Unix(1460289341, 207401672), 0, 0)
+	restic.TestCreateSnapshot(t, repo, time.Unix(1460289341, 207401672), 0)
 
 	testTopUIDGID(t, Config{}, repo, uint32(os.Getuid()), uint32(os.Getgid()))
 	testTopUIDGID(t, Config{OwnerIsRoot: true}, repo, 0, 0)
@@ -216,6 +217,37 @@ func testTopUIDGID(t *testing.T, cfg Config, repo restic.Repository, uid, gid ui
 	rtest.Equals(t, uint32(0), attr.Gid)
 }
 
+// Test reporting of fuse.Attr.Blocks in multiples of 512.
+func TestBlocks(t *testing.T) {
+	root := &Root{}
+
+	for _, c := range []struct {
+		size, blocks uint64
+	}{
+		{0, 0},
+		{1, 1},
+		{511, 1},
+		{512, 1},
+		{513, 2},
+		{1024, 2},
+		{1025, 3},
+		{41253, 81},
+	} {
+		target := strings.Repeat("x", int(c.size))
+
+		for _, n := range []fs.Node{
+			&file{root: root, node: &restic.Node{Size: uint64(c.size)}},
+			&link{root: root, node: &restic.Node{LinkTarget: target}},
+			&snapshotLink{root: root, snapshot: &restic.Snapshot{}, target: target},
+		} {
+			var a fuse.Attr
+			err := n.Attr(context.TODO(), &a)
+			rtest.OK(t, err)
+			rtest.Equals(t, c.blocks, a.Blocks)
+		}
+	}
+}
+
 func TestInodeFromNode(t *testing.T) {
 	node := &restic.Node{Name: "foo.txt", Type: "chardev", Links: 2}
 	ino1 := inodeFromNode(1, node)
@@ -226,6 +258,42 @@ func TestInodeFromNode(t *testing.T) {
 	ino1 = inodeFromNode(1, node)
 	ino2 = inodeFromNode(2, node)
 	rtest.Assert(t, ino1 != ino2, "same inode %d but different parent", ino1)
+
+	// Regression test: in a path a/b/b, the grandchild should not get the
+	// same inode as the grandparent.
+	a := &restic.Node{Name: "a", Type: "dir", Links: 2}
+	ab := &restic.Node{Name: "b", Type: "dir", Links: 2}
+	abb := &restic.Node{Name: "b", Type: "dir", Links: 2}
+	inoA := inodeFromNode(1, a)
+	inoAb := inodeFromNode(inoA, ab)
+	inoAbb := inodeFromNode(inoAb, abb)
+	rtest.Assert(t, inoA != inoAb, "inode(a/b) = inode(a)")
+	rtest.Assert(t, inoA != inoAbb, "inode(a/b/b) = inode(a)")
+}
+
+func TestLink(t *testing.T) {
+	node := &restic.Node{Name: "foo.txt", Type: "symlink", Links: 1, LinkTarget: "dst", ExtendedAttributes: []restic.ExtendedAttribute{
+		{Name: "foo", Value: []byte("bar")},
+	}}
+
+	lnk, err := newLink(&Root{}, 42, node)
+	rtest.OK(t, err)
+	target, err := lnk.Readlink(context.TODO(), nil)
+	rtest.OK(t, err)
+	rtest.Equals(t, node.LinkTarget, target)
+
+	exp := &fuse.ListxattrResponse{}
+	exp.Append("foo")
+	resp := &fuse.ListxattrResponse{}
+	rtest.OK(t, lnk.Listxattr(context.TODO(), &fuse.ListxattrRequest{}, resp))
+	rtest.Equals(t, exp.Xattr, resp.Xattr)
+
+	getResp := &fuse.GetxattrResponse{}
+	rtest.OK(t, lnk.Getxattr(context.TODO(), &fuse.GetxattrRequest{Name: "foo"}, getResp))
+	rtest.Equals(t, node.ExtendedAttributes[0].Value, getResp.Xattr)
+
+	err = lnk.Getxattr(context.TODO(), &fuse.GetxattrRequest{Name: "invalid"}, nil)
+	rtest.Assert(t, err != nil, "missing error on reading invalid xattr")
 }
 
 var sink uint64

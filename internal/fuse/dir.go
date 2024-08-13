@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/anacrolix/fuse"
 	"github.com/anacrolix/fuse/fs"
@@ -45,7 +46,7 @@ func newDir(root *Root, inode, parentInode uint64, node *restic.Node) (*dir, err
 	}, nil
 }
 
-// returing a wrapped context.Canceled error will instead result in returing
+// returning a wrapped context.Canceled error will instead result in returning
 // an input / output error to the user. Thus unwrap the error to match the
 // expectations of bazil/fuse
 func unwrapCtxCanceled(err error) error {
@@ -57,7 +58,7 @@ func unwrapCtxCanceled(err error) error {
 
 // replaceSpecialNodes replaces nodes with name "." and "/" by their contents.
 // Otherwise, the node is returned.
-func replaceSpecialNodes(ctx context.Context, repo restic.Repository, node *restic.Node) ([]*restic.Node, error) {
+func replaceSpecialNodes(ctx context.Context, repo restic.BlobLoader, node *restic.Node) ([]*restic.Node, error) {
 	if node.Type != "dir" || node.Subtree == nil {
 		return []*restic.Node{node}, nil
 	}
@@ -106,6 +107,10 @@ func (d *dir) open(ctx context.Context) error {
 	}
 	items := make(map[string]*restic.Node)
 	for _, n := range tree.Nodes {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		nodes, err := replaceSpecialNodes(ctx, d.root.repo, n)
 		if err != nil {
 			debug.Log("  replaceSpecialNodes(%v) failed: %v", n, err)
@@ -119,7 +124,7 @@ func (d *dir) open(ctx context.Context) error {
 	return nil
 }
 
-func (d *dir) Attr(ctx context.Context, a *fuse.Attr) error {
+func (d *dir) Attr(_ context.Context, a *fuse.Attr) error {
 	debug.Log("Attr()")
 	a.Inode = d.inode
 	a.Mode = os.ModeDir | d.node.Mode
@@ -170,6 +175,10 @@ func (d *dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	})
 
 	for _, node := range d.items {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		name := cleanupNodeName(node.Name)
 		var typ fuse.DirentType
 		switch node.Type {
@@ -202,7 +211,7 @@ func (d *dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	node, ok := d.items[name]
 	if !ok {
 		debug.Log("  Lookup(%v) -> not found", name)
-		return nil, fuse.ENOENT
+		return nil, syscall.ENOENT
 	}
 	inode := inodeFromNode(d.inode, node)
 	switch node.Type {
@@ -216,24 +225,15 @@ func (d *dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 		return newOther(d.root, inode, node)
 	default:
 		debug.Log("  node %v has unknown type %v", name, node.Type)
-		return nil, fuse.ENOENT
+		return nil, syscall.ENOENT
 	}
 }
 
-func (d *dir) Listxattr(ctx context.Context, req *fuse.ListxattrRequest, resp *fuse.ListxattrResponse) error {
-	debug.Log("Listxattr(%v, %v)", d.node.Name, req.Size)
-	for _, attr := range d.node.ExtendedAttributes {
-		resp.Append(attr.Name)
-	}
+func (d *dir) Listxattr(_ context.Context, req *fuse.ListxattrRequest, resp *fuse.ListxattrResponse) error {
+	nodeToXattrList(d.node, req, resp)
 	return nil
 }
 
-func (d *dir) Getxattr(ctx context.Context, req *fuse.GetxattrRequest, resp *fuse.GetxattrResponse) error {
-	debug.Log("Getxattr(%v, %v, %v)", d.node.Name, req.Name, req.Size)
-	attrval := d.node.GetExtendedAttribute(req.Name)
-	if attrval != nil {
-		resp.Xattr = attrval
-		return nil
-	}
-	return fuse.ErrNoXattr
+func (d *dir) Getxattr(_ context.Context, req *fuse.GetxattrRequest, resp *fuse.GetxattrResponse) error {
+	return nodeGetXattr(d.node, req, resp)
 }

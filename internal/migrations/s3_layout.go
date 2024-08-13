@@ -6,11 +6,12 @@ import (
 	"os"
 	"path"
 
+	"github.com/restic/restic/internal/backend"
 	"github.com/restic/restic/internal/backend/layout"
 	"github.com/restic/restic/internal/backend/s3"
-	"github.com/restic/restic/internal/cache"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
+	"github.com/restic/restic/internal/repository"
 	"github.com/restic/restic/internal/restic"
 )
 
@@ -22,24 +23,9 @@ func init() {
 // "default" layout.
 type S3Layout struct{}
 
-func toS3Backend(repo restic.Repository) *s3.Backend {
-	b := repo.Backend()
-	// unwrap cache
-	if be, ok := b.(*cache.Backend); ok {
-		b = be.Backend
-	}
-
-	be, ok := b.(*s3.Backend)
-	if !ok {
-		debug.Log("backend is not s3")
-		return nil
-	}
-	return be
-}
-
 // Check tests whether the migration can be applied.
-func (m *S3Layout) Check(ctx context.Context, repo restic.Repository) (bool, string, error) {
-	be := toS3Backend(repo)
+func (m *S3Layout) Check(_ context.Context, repo restic.Repository) (bool, string, error) {
+	be := repository.AsS3Backend(repo.(*repository.Repository))
 	if be == nil {
 		debug.Log("backend is not s3")
 		return false, "backend is not s3", nil
@@ -79,8 +65,8 @@ func (m *S3Layout) moveFiles(ctx context.Context, be *s3.Backend, l layout.Layou
 		fmt.Fprintf(os.Stderr, "renaming file returned error: %v\n", err)
 	}
 
-	return be.List(ctx, t, func(fi restic.FileInfo) error {
-		h := restic.Handle{Type: t, Name: fi.Name}
+	return be.List(ctx, t, func(fi backend.FileInfo) error {
+		h := backend.Handle{Type: t, Name: fi.Name}
 		debug.Log("move %v", h)
 
 		return retry(maxErrors, printErr, func() error {
@@ -91,7 +77,7 @@ func (m *S3Layout) moveFiles(ctx context.Context, be *s3.Backend, l layout.Layou
 
 // Apply runs the migration.
 func (m *S3Layout) Apply(ctx context.Context, repo restic.Repository) error {
-	be := toS3Backend(repo)
+	be := repository.AsS3Backend(repo.(*repository.Repository))
 	if be == nil {
 		debug.Log("backend is not s3")
 		return errors.New("backend is not s3")

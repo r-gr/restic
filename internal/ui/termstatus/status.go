@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -73,8 +74,8 @@ func New(wr io.Writer, errWriter io.Writer, disableStatus bool) *Terminal {
 		// only use the fancy status code when we're running on a real terminal.
 		t.canUpdateStatus = true
 		t.fd = d.Fd()
-		t.clearCurrentLine = clearCurrentLine(wr, t.fd)
-		t.moveCursorUp = moveCursorUp(wr, t.fd)
+		t.clearCurrentLine = clearCurrentLine(t.fd)
+		t.moveCursorUp = moveCursorUp(t.fd)
 	}
 
 	return t
@@ -104,7 +105,7 @@ func (t *Terminal) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			if !IsProcessBackground(t.fd) {
-				t.undoStatus(len(status))
+				t.writeStatus([]string{})
 			}
 
 			return
@@ -234,30 +235,6 @@ func (t *Terminal) runWithoutStatus(ctx context.Context) {
 	}
 }
 
-func (t *Terminal) undoStatus(lines int) {
-	for i := 0; i < lines; i++ {
-		t.clearCurrentLine(t.wr, t.fd)
-
-		_, err := t.wr.WriteRune('\n')
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "write failed: %v\n", err)
-		}
-
-		// flush is needed so that the current line is updated
-		err = t.wr.Flush()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "flush failed: %v\n", err)
-		}
-	}
-
-	t.moveCursorUp(t.wr, t.fd, lines)
-
-	err := t.wr.Flush()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "flush failed: %v\n", err)
-	}
-}
-
 func (t *Terminal) print(line string, isErr bool) {
 	// make sure the line ends with a line break
 	if line[len(line)-1] != '\n' {
@@ -275,21 +252,9 @@ func (t *Terminal) Print(line string) {
 	t.print(line, false)
 }
 
-// Printf uses fmt.Sprintf to write a line to the terminal.
-func (t *Terminal) Printf(msg string, args ...interface{}) {
-	s := fmt.Sprintf(msg, args...)
-	t.Print(s)
-}
-
 // Error writes an error to the terminal.
 func (t *Terminal) Error(line string) {
 	t.print(line, true)
-}
-
-// Errorf uses fmt.Sprintf to write an error line to the terminal.
-func (t *Terminal) Errorf(msg string, args ...interface{}) {
-	s := fmt.Sprintf(msg, args...)
-	t.Error(s)
 }
 
 // Truncate s to fit in width (number of terminal cells) w.
@@ -302,34 +267,56 @@ func Truncate(s string, w int) string {
 		return s
 	}
 
-	for i, r := range s {
+	for i := uint(0); i < uint(len(s)); {
+		utfsize := uint(1) // UTF-8 encoding size of first rune in s.
 		w--
-		if r > unicode.MaxASCII && wideRune(r) {
-			w--
+
+		if s[i] > unicode.MaxASCII {
+			var wide bool
+			if wide, utfsize = wideRune(s[i:]); wide {
+				w--
+			}
 		}
 
 		if w < 0 {
 			return s[:i]
 		}
+		i += utfsize
 	}
 
 	return s
 }
 
-// Guess whether r would occupy two terminal cells instead of one.
-// This cannot be determined exactly without knowing the terminal font,
-// so we treat all ambigous runes as full-width, i.e., two cells.
-func wideRune(r rune) bool {
-	kind := width.LookupRune(r).Kind()
-	return kind != width.Neutral && kind != width.EastAsianNarrow
+// Guess whether the first rune in s would occupy two terminal cells
+// instead of one. This cannot be determined exactly without knowing
+// the terminal font, so we treat all ambiguous runes as full-width,
+// i.e., two cells.
+func wideRune(s string) (wide bool, utfsize uint) {
+	prop, size := width.LookupString(s)
+	kind := prop.Kind()
+	wide = kind != width.Neutral && kind != width.EastAsianNarrow
+	return wide, uint(size)
+}
+
+func sanitizeLines(lines []string, width int) []string {
+	// Sanitize lines and truncate them if they're too long.
+	for i, line := range lines {
+		line = Quote(line)
+		if width > 0 {
+			line = Truncate(line, width-2)
+		}
+		if i < len(lines)-1 { // Last line gets no line break.
+			line += "\n"
+		}
+		lines[i] = line
+	}
+	return lines
 }
 
 // SetStatus updates the status lines.
+// The lines should not contain newlines; this method adds them.
+// Pass nil or an empty array to remove the status lines.
 func (t *Terminal) SetStatus(lines []string) {
-	if len(lines) == 0 {
-		return
-	}
-
 	// only truncate interactive status output
 	var width int
 	if t.canUpdateStatus {
@@ -341,21 +328,25 @@ func (t *Terminal) SetStatus(lines []string) {
 		}
 	}
 
-	// make sure that all lines have a line break and are not too long
-	for i, line := range lines {
-		line = strings.TrimRight(line, "\n")
-		if width > 0 {
-			line = Truncate(line, width-2)
-		}
-		lines[i] = line + "\n"
-	}
-
-	// make sure the last line does not have a line break
-	last := len(lines) - 1
-	lines[last] = strings.TrimRight(lines[last], "\n")
+	sanitizeLines(lines, width)
 
 	select {
 	case t.status <- status{lines: lines}:
 	case <-t.closed:
 	}
+}
+
+// Quote lines with funny characters in them, meaning control chars, newlines,
+// tabs, anything else non-printable and invalid UTF-8.
+//
+// This is intended to produce a string that does not mess up the terminal
+// rather than produce an unambiguous quoted string.
+func Quote(line string) string {
+	for _, r := range line {
+		// The replacement character usually means the input is not UTF-8.
+		if r == unicode.ReplacementChar || !unicode.IsPrint(r) {
+			return strconv.Quote(line)
+		}
+	}
+	return line
 }
